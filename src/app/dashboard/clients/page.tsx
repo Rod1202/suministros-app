@@ -1,7 +1,7 @@
 // src/app/dashboard/clients/page.tsx
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { useUserRole } from '@/hooks/useUserRole';
