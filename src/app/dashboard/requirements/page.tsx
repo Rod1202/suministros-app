@@ -4,617 +4,405 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { useUserRole } from '@/hooks/useUserRole';
 import { RequerimientoTable } from '@/components/RequerimientoTable';
-// #################### IMPORTAR EL NUEVO COMPONENTE ####################
 import { RequerimientoHistoricoTable } from '@/components/RequerimientoHistoricoTable';
 import { RequerimientoAprobadoTable } from '@/components/RequerimientoAprobado';
-// #################### FIN IMPORTACIÓN ####################
+import { RepartoTable, RepartoRow } from '@/components/RepartoTable';
+import { NuevoRequerimientoModal } from '@/components/NuevoRequerimientoModal';
 import { Loader } from '@/components/Loader';
 import { ErrorMessage } from '@/components/ErrorMessage';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Plus } from 'lucide-react';
+import { Plus, Truck, RefreshCw, Search, X } from 'lucide-react';
+
+type TabType = 'activo' | 'historico' | 'aprobado' | 'guiados';
 
 export default function RequirementsPage() {
   const { profile, loading: roleLoading } = useUserRole();
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'activo' | 'historico' | 'aprobado'>('activo');
+  const isOperador = profile?.role === 'operador';
+
+  const [activeTab, setActiveTab] = useState<TabType>(isOperador ? 'historico' : 'activo');
+  // Filtros del tab Activos
+  const [activoSerieFilter, setActivoSerieFilter] = useState('');
+  const [activoClienteFilter, setActivoClienteFilter] = useState('');
+  // Filtros del tab Histórico
   const [serieFilter, setSerieFilter] = useState('');
+  const [clienteFilter, setClienteFilter] = useState('');
+  const [guiaFilter, setGuiaFilter] = useState('');
   const [showModal, setShowModal] = useState(false);
 
-  // Estados del modal
-  const [clientes, setClientes] = useState<any[]>([]);
-  const [series, setSeries] = useState<any[]>([]);
-  const [skus, setSkus] = useState<any[]>([]);
-  const [clienteSeleccionado, setClienteSeleccionado] = useState<number | null>(null);
-  const [serieSeleccionada, setSerieSeleccionada] = useState<string | null>(null);
-  const [skuSeleccionado, setSkuSeleccionado] = useState<string | null>(null);
-  const [filtroCliente, setFiltroCliente] = useState('');
-  const [filtroSerie, setFiltroSerie] = useState('');
-  const [filtroSku, setFiltroSku] = useState('');
-
-  // Estados de bloqueo
-  const [clienteBloqueado, setClienteBloqueado] = useState(false);
-  const [serieBloqueada, setSerieBloqueada] = useState(false);
-
-  // Estado para controlar si el desplegable de SKU está abierto
-  const [skuDropdownOpen, setSkuDropdownOpen] = useState(false);
-
-  // Estados para los nuevos campos
-  const [fechaInstalacion, setFechaInstalacion] = useState('');
-  const [fechaError, setFechaError] = useState('');
-
-  // 🔹 Cargar requerimientos
-  // 🔹 Cargar requerimientos (activos + histórico unificados)
+  // ─── Carga única de datos ──────────────────────────────────────────────────
+  // Todos los tabs comparten el mismo dataset. `loadRows` es el único onRefresh.
+  // Así cualquier cambio de estado se refleja en TODOS los tabs simultáneamente.
   const loadRows = useCallback(async () => {
-  try {
-    setLoading(true);
-    setError(null);
-    
-    // #################### REEMPLAZAR EL RPC POR QUERIES DIRECTAS ####################
-    const [{ data: activos, error: errActivos }, { data: historicos, error: errHist }] =
-      await Promise.all([
-        supabase.from('requerimiento').select(`
-          id_requerimiento,
-          serie_impresora,
-          id_cliente,
-          cod_sku,
-          cantidad_solicitada,
-          estado,
-          guia,
-          porcentaje,
-          dias_restantes,
-          fecha_solicitud,
-          fecha_atencion,
-          fecha_instalacion,
-          creado_por,
-          observacion,
-          timestamp_registro,
-          nombre_contacto,
-          numero_contacto,
-          departamento,
-          provincia,
-          distrito,
-          direccion,
-          clientes (nombre_especifico),
-          impresora (id_modelo, direccion, provincia, modelo:modelo (nombre))
-        `),
-        supabase.from('requerimiento_historico').select(`
-          id_historico,
-          id_requerimiento,
-          serie_impresora,
-          id_cliente,
-          cod_sku,
-          cantidad_solicitada,
-          estado,
-          guia,
-          porcentaje,
-          dias_restantes,
-          fecha_solicitud,
-          fecha_atencion,
-          fecha_instalacion,
-          creado_por,
-          observacion,
-          timestamp_registro,
-          timestamp_archivado,
-          nombre_contacto,
-          numero_contacto,
-          departamento,
-          provincia,
-          distrito,
-          direccion
-        `)
-        .order('timestamp_registro', { ascending: false })
-        .limit(100),
-      ]);
+    try {
+      setLoading(true);
+      setError(null);
 
-    if (errActivos || errHist) throw errActivos || errHist;
+      const [{ data: activos, error: errActivos }, { data: historicos, error: errHist }] =
+        await Promise.all([
+          // Todos los requerimientos activos (todas las tablas los necesitan)
+          supabase.from('requerimiento').select(`
+            id_requerimiento,
+            serie_impresora,
+            id_cliente,
+            cod_sku,
+            sku_default,
+            cantidad_solicitada,
+            estado,
+            guia,
+            porcentaje,
+            dias_restantes,
+            fecha_solicitud,
+            fecha_atencion,
+            fecha_instalacion,
+            creado_por,
+            observacion,
+            timestamp_registro,
+            nombre_contacto,
+            numero_contacto,
+            departamento,
+            provincia,
+            distrito,
+            direccion,
+            clientes (nombre_especifico),
+            impresora (id_modelo, direccion, provincia, modelo:modelo (nombre))
+          `),
 
-    const activosMapped = (activos || []).map((r) => ({ ...r, fuente: 'activo' }));
-    const historicosMapped = (historicos || []).map((r) => ({
-      ...r,
-      fuente: 'historico' as const,
-      clientes: null,
-      impresora: null 
-    }));
+          // Histórico
+          supabase.from('requerimiento_historico').select(`
+            id_historico,
+            id_requerimiento,
+            serie_impresora,
+            id_cliente,
+            cod_sku,
+            sku_default,
+            cantidad_solicitada,
+            estado,
+            guia,
+            porcentaje,
+            dias_restantes,
+            fecha_solicitud,
+            fecha_atencion,
+            fecha_instalacion,
+            creado_por,
+            observacion,
+            timestamp_registro,
+            timestamp_archivado,
+            nombre_contacto,
+            numero_contacto,
+            departamento,
+            provincia,
+            distrito,
+            direccion,
+            coment,
+            clientes (nombre_especifico)
+          `)
+            .order('timestamp_registro', { ascending: false })
+            .limit(100),
+        ]);
 
-    setRows([...activosMapped, ...historicosMapped]);
-    // #################### FIN REEMPLAZO ####################
-  } catch (err: any) {
-    console.error(err);
-    setError(err.message || 'Error al cargar los requerimientos.');
-  } finally {
-    setLoading(false);
-  }
-}, []);
+      if (errActivos || errHist) throw errActivos || errHist;
 
-  useEffect(() => {
-    loadRows();
-  }, [loadRows]);
+      const activosMapped = (activos || []).map((r) => ({ ...r, fuente: 'activo' as const }));
+      const historicosMapped = (historicos || []).map((r) => ({
+        ...r,
+        fuente: 'historico' as const,
+        // Supabase devuelve el join como array — tomamos el primer elemento
+        clientes: Array.isArray(r.clientes) ? r.clientes[0] ?? null : (r.clientes ?? null),
+        impresora: null,
+      }));
 
-  // ✅ Cargar clientes
-  useEffect(() => {
-    const fetchClientes = async () => {
-      const { data, error } = await supabase
-        .from('clientes')
-        .select('id_cliente, nombre_especifico')
-        .order('nombre_especifico', { ascending: true });
-      if (!error) setClientes(data || []);
-      else console.error('Error fetchClientes:', error);
-    };
-    fetchClientes();
+      setRows([...activosMapped, ...historicosMapped]);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Error al cargar los requerimientos.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  // 🔹 Cargar series según cliente
-  useEffect(() => {
-    if (!clienteSeleccionado) {
-      setSeries([]);
-      setFiltroSerie('');
-      setSerieSeleccionada(null);
-      return;
-    }
-    const fetchSeries = async () => {
-      const { data, error } = await supabase
-        .from('impresora')
-        .select('serie, id_modelo')
-        .eq('id_cliente', clienteSeleccionado)
-        .order('serie', { ascending: true });
-      if (!error) setSeries(data || []);
-      else console.error('Error fetchSeries:', error);
-    };
-    fetchSeries();
-  }, [clienteSeleccionado]);
-
-  // 🔹 Cargar SKUs según compatibilidad del modelo
-  useEffect(() => {
-    if (!serieSeleccionada) {
-      setSkus([]);
-      return;
-    }
-
-    const fetchSkus = async () => {
-      const { data: imp, error: errImp } = await supabase
-        .from('impresora')
-        .select('id_modelo')
-        .eq('serie', serieSeleccionada)
-        .single();
-
-      if (errImp || !imp?.id_modelo) {
-        console.error('Error modelo:', errImp);
-        setSkus([]);
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from('compatibilidad')
-        .select(`
-          cod_sku,
-          sku (
-            nombre,
-            id_color,
-            color:color(nombre)
-          )
-        `)
-        .eq('id_modelo', imp.id_modelo);
-
-      if (error) {
-        console.error('Error fetchSkus:', error);
-        setSkus([]);
-      } else {
-        const mapped = (data || []).map((item: any) => ({
-          cod_sku: item.cod_sku,
-          nombre: item.sku?.nombre || '',
-          color: item.sku?.color?.nombre || '',
-        }));
-        setSkus(mapped);
-      }
-    };
-
-    fetchSkus();
-  }, [serieSeleccionada]);
-
-  // Función para validar y convertir fecha dd/mm/yyyy a formato ISO
-  const validarYConvertirFecha = (fechaStr: string): string | null => {
-    const regex = /^(\d{2})\/(\d{2})\/(\d{4})$/;
-    const match = fechaStr.match(regex);
-    
-    if (!match) {
-      setFechaError('Formato inválido. Use dd/mm/yyyy');
-      return null;
-    }
-
-    const dia = parseInt(match[1], 10);
-    const mes = parseInt(match[2], 10);
-    const año = parseInt(match[3], 10);
-
-    // Validar rangos
-    if (mes < 1 || mes > 12) {
-      setFechaError('Mes inválido (1-12)');
-      return null;
-    }
-
-    if (dia < 1 || dia > 31) {
-      setFechaError('Día inválido (1-31)');
-      return null;
-    }
-
-    // Validar días según el mes
-    const diasPorMes = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    
-    // Año bisiesto
-    if (mes === 2 && ((año % 4 === 0 && año % 100 !== 0) || año % 400 === 0)) {
-      diasPorMes[1] = 29;
-    }
-
-    if (dia > diasPorMes[mes - 1]) {
-      setFechaError(`Día inválido para ${mes}/${año}`);
-      return null;
-    }
-
-    setFechaError('');
-    
-    // Convertir a formato ISO (YYYY-MM-DD)
-    return `${año}-${mes.toString().padStart(2, '0')}-${dia.toString().padStart(2, '0')}`;
-  };
-
-  // Función para manejar el cambio de fecha con formato
-  const handleFechaChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let value = e.target.value.replace(/\D/g, ''); // Solo números
-    
-    if (value.length >= 2) {
-      value = value.slice(0, 2) + '/' + value.slice(2);
-    }
-    if (value.length >= 5) {
-      value = value.slice(0, 5) + '/' + value.slice(5, 9);
-    }
-    
-    setFechaInstalacion(value);
-    
-    // Validar solo si tiene el formato completo
-    if (value.length === 10) {
-      validarYConvertirFecha(value);
-    } else {
-      setFechaError('');
-    }
-  };
-
-  // 🔹 Reiniciar formulario del modal
-  const resetModalForm = () => {
-    setFiltroCliente('');
-    setClienteSeleccionado(null);
-    setClienteBloqueado(false);
-    setFiltroSerie('');
-    setSerieSeleccionada(null);
-    setSerieBloqueada(false);
-    setFiltroSku('');
-    setSkuSeleccionado(null);
-    setSkus([]);
-    setSeries([]);
-    setSkuDropdownOpen(false);
-    setFechaInstalacion('');
-    setFechaError('');
-  };
-
-  // 🔹 Controlar apertura/cierre del modal (limpieza total)
-  const handleModalToggle = (open: boolean) => {
-    setShowModal(open);
-    if (open) {
-      resetModalForm();
-    }
-  };
+  useEffect(() => { loadRows(); }, [loadRows]);
 
   if (roleLoading || loading) return <Loader />;
   if (error) return <ErrorMessage message={error} />;
 
-  const filteredRows = rows.filter((r) => r.fuente === activeTab);
+  // ─── Derivar datos por tab desde el mismo dataset ──────────────────────────
+  const activosRows = rows.filter((r) => r.fuente === 'activo');
+  const historicosRows = rows.filter((r) => r.fuente === 'historico');
 
-  // #################### FILTRAR HISTÓRICO POR SERIE ####################
-  const filteredHistorico = serieFilter
-    ? filteredRows.filter((r) =>
-        r.serie_impresora?.toLowerCase().includes(serieFilter.toLowerCase())
-      )
-    : filteredRows;
-  // #################### FIN FILTRADO ####################
+  // Activos: todos los requerimientos en la tabla `requerimiento`, con filtros opcionales
+  const activosPuros = activosRows.filter((r) => {
+    const nombreCliente = r.clientes?.nombre_especifico ?? r.clientes?.[0]?.nombre_especifico ?? '';
+    const matchSerie = !activoSerieFilter || r.serie_impresora?.toLowerCase().includes(activoSerieFilter.toLowerCase());
+    const matchCliente = !activoClienteFilter || nombreCliente.toLowerCase().includes(activoClienteFilter.toLowerCase());
+    return matchSerie && matchCliente;
+  });
+
+  // Aprobados: estado='aprobado' — RequerimientoAprobadoTable también filtra internamente
+  // Le pasamos todos los activos para que funcione aunque el estado cambie entre renders
+
+  // Guiados pendientes: activos CON guía asignada (cualquier estado)
+  const guiadosPendientes: RepartoRow[] = activosRows
+    .filter((r) => r.guia && r.guia.trim() !== '')
+    .map((r) => ({
+      id_requerimiento: r.id_requerimiento,
+      serie_impresora: r.serie_impresora,
+      id_cliente: r.id_cliente,
+      cod_sku: r.cod_sku,
+      estado: r.estado,
+      guia: r.guia,
+      fecha_atencion: r.fecha_atencion,
+      nombre_contacto: r.nombre_contacto,
+      numero_contacto: r.numero_contacto,
+      departamento: r.departamento,
+      provincia: r.provincia,
+      direccion: r.direccion,
+      clientes: Array.isArray(r.clientes) ? r.clientes[0] ?? null : r.clientes,
+      impresora: Array.isArray(r.impresora) ? r.impresora[0] ?? null : r.impresora,
+      fuente: 'activo' as const,
+    }));
+
+  // Guiados atendidos: del histórico que tengan guía
+  const guiadosAtendidos: RepartoRow[] = historicosRows
+    .filter((r) => r.guia && r.guia.trim() !== '')
+    .map((r) => ({
+      id_historico: r.id_historico,
+      id_requerimiento: r.id_requerimiento,
+      serie_impresora: r.serie_impresora,
+      id_cliente: r.id_cliente,
+      cod_sku: r.cod_sku,
+      estado: r.estado,
+      guia: r.guia,
+      fecha_atencion: r.fecha_atencion,
+      nombre_contacto: r.nombre_contacto,
+      numero_contacto: r.numero_contacto,
+      departamento: r.departamento,
+      provincia: r.provincia,
+      direccion: r.direccion,
+      clientes: null,
+      impresora: null,
+      fuente: 'historico' as const,
+    }));
+
+  // Histórico: filtros combinados (serie + cliente por nombre + guía) aplicados con AND
+  const filteredHistorico = historicosRows.filter((r) => {
+    const nombreCliente = (r as any).clientes?.nombre_especifico ?? '';
+    const matchSerie = !serieFilter || r.serie_impresora?.toLowerCase().includes(serieFilter.toLowerCase());
+    const matchCliente = !clienteFilter || nombreCliente.toLowerCase().includes(clienteFilter.toLowerCase());
+    const matchGuia = !guiaFilter || r.guia?.toLowerCase().includes(guiaFilter.toLowerCase());
+    return matchSerie && matchCliente && matchGuia;
+  });
 
   return (
     <div className="p-4 space-y-4 relative">
       <h1 className="text-2xl font-bold text-gray-800">Gestión de Requerimientos</h1>
 
+      {/* Botón visible para todos los roles */}
       <button
-        onClick={() => handleModalToggle(true)}
+        onClick={() => setShowModal(true)}
         className="absolute top-4 right-4 flex items-center bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-all"
       >
         <Plus className="w-4 h-4 mr-2" /> Nuevo Requerimiento
       </button>
 
-      <Tabs defaultValue={activeTab}>
+      <Tabs defaultValue={isOperador ? 'historico' : activeTab}>
         <TabsList>
-          <TabsTrigger value="activo" onClick={() => setActiveTab('activo')}>
-            Activos
-          </TabsTrigger>
+          {/* Activos — solo para roles distintos de operador */}
+          {!isOperador && (
+            <TabsTrigger value="activo" onClick={() => setActiveTab('activo')}>
+              Activos
+              {activosPuros.length > 0 && (
+                <span className="ml-1.5 text-xs bg-blue-100 text-blue-700 rounded-full px-1.5">
+                  {activosPuros.length}
+                </span>
+              )}
+            </TabsTrigger>
+          )}
+
+          {!isOperador && (
+            <TabsTrigger value="aprobado" onClick={() => setActiveTab('aprobado')}>
+              Aprobados
+            </TabsTrigger>
+          )}
+
+          {!isOperador && (
+            <TabsTrigger
+              value="guiados"
+              onClick={() => setActiveTab('guiados')}
+              className="flex items-center gap-1.5"
+            >
+              <Truck className="w-3.5 h-3.5" />
+              Guiados
+              {guiadosPendientes.length > 0 && (
+                <span className="ml-1 text-xs bg-amber-100 text-amber-700 rounded-full px-1.5">
+                  {guiadosPendientes.length}
+                </span>
+              )}
+            </TabsTrigger>
+          )}
+
+          {/* Histórico — visible para todos */}
           <TabsTrigger value="historico" onClick={() => setActiveTab('historico')}>
             Histórico
           </TabsTrigger>
-          <TabsTrigger value="aprobado" onClick={() => setActiveTab('aprobado')}>
-            Aprobados
-          </TabsTrigger> 
         </TabsList>
 
+        {/* ── Activos ─────────────────────────────────────────────────────── */}
         <TabsContent value="activo" className="mt-4">
-          <RequerimientoTable rows={filteredRows} onRefresh={loadRows} user={profile} editable />
+          {/* Barra de búsqueda y acciones */}
+          <div className="flex flex-wrap items-center gap-3 mb-5 p-3 bg-gray-50 rounded-xl border border-gray-200 shadow-sm">
+            {/* Campo: Cliente */}
+            <div className="relative flex items-center">
+              <Search className="absolute left-3 w-4 h-4 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Buscar cliente..."
+                value={activoClienteFilter}
+                onChange={(e) => setActivoClienteFilter(e.target.value)}
+                className="pl-9 pr-3 py-2 w-48 text-sm bg-white border border-gray-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition"
+              />
+              {activoClienteFilter && (
+                <button onClick={() => setActivoClienteFilter('')} className="absolute right-2 text-gray-400 hover:text-gray-600">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Campo: Serie */}
+            <div className="relative flex items-center">
+              <Search className="absolute left-3 w-4 h-4 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Buscar serie..."
+                value={activoSerieFilter}
+                onChange={(e) => setActivoSerieFilter(e.target.value)}
+                className="pl-9 pr-3 py-2 w-44 text-sm bg-white border border-gray-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition"
+              />
+              {activoSerieFilter && (
+                <button onClick={() => setActivoSerieFilter('')} className="absolute right-2 text-gray-400 hover:text-gray-600">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Separador */}
+            <div className="flex-1" />
+
+            {/* Botón Refrescar */}
+            <button
+              onClick={loadRows}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg shadow-sm hover:bg-gray-100 hover:text-blue-600 transition"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Actualizar
+            </button>
+          </div>
+          <RequerimientoTable
+            rows={activosPuros}
+            onRefresh={loadRows}
+            user={profile}
+            editable
+          />
         </TabsContent>
 
-        {/* #################### CAMBIO: USAR COMPONENTE HISTÓRICO #################### */}
-        <TabsContent value="historico" className="mt-4">
-          <input
-            type="text"
-            placeholder="Filtrar por serie..."
-            value={serieFilter}
-            onChange={(e) => setSerieFilter(e.target.value)}
-            className="border rounded p-2 w-64 mb-4"
-          />
-          <RequerimientoHistoricoTable 
-            rows={filteredHistorico} 
-            onRefresh={loadRows} 
-            user={profile} 
-          />
-        </TabsContent>
+        {/* ── Aprobados — asignación de guía ──────────────────────────────── */}
         <TabsContent value="aprobado" className="mt-4">
-          <RequerimientoAprobadoTable rows={filteredHistorico} onRefresh={loadRows} />
+          {/* Pasa TODOS los activos; el componente filtra internamente por estado='aprobado' */}
+          <RequerimientoAprobadoTable rows={activosRows} onRefresh={loadRows} />
         </TabsContent>
-        {/* #################### FIN CAMBIO #################### */}
+
+        {/* ── Guiados — área de reparto ────────────────────────────────────── */}
+        <TabsContent value="guiados" className="mt-4">
+          <RepartoTable
+            pendingRows={guiadosPendientes}
+            attendedRows={guiadosAtendidos}
+            onRefresh={loadRows}
+          />
+        </TabsContent>
+
+        {/* ── Histórico ────────────────────────────────────────────────────── */}
+        <TabsContent value="historico" className="mt-4">
+          {/* Barra de búsqueda y acciones */}
+          <div className="flex flex-wrap items-center gap-3 mb-5 p-3 bg-gray-50 rounded-xl border border-gray-200 shadow-sm">
+            {/* Campo: Serie */}
+            <div className="relative flex items-center">
+              <Search className="absolute left-3 w-4 h-4 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Buscar serie..."
+                value={serieFilter}
+                onChange={(e) => setSerieFilter(e.target.value)}
+                className="pl-9 pr-3 py-2 w-44 text-sm bg-white border border-gray-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition"
+              />
+              {serieFilter && (
+                <button onClick={() => setSerieFilter('')} className="absolute right-2 text-gray-400 hover:text-gray-600">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Campo: Cliente */}
+            <div className="relative flex items-center">
+              <Search className="absolute left-3 w-4 h-4 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Buscar cliente..."
+                value={clienteFilter}
+                onChange={(e) => setClienteFilter(e.target.value)}
+                className="pl-9 pr-3 py-2 w-48 text-sm bg-white border border-gray-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition"
+              />
+              {clienteFilter && (
+                <button onClick={() => setClienteFilter('')} className="absolute right-2 text-gray-400 hover:text-gray-600">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Campo: Guía */}
+            <div className="relative flex items-center">
+              <Search className="absolute left-3 w-4 h-4 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Buscar guía..."
+                value={guiaFilter}
+                onChange={(e) => setGuiaFilter(e.target.value)}
+                className="pl-9 pr-3 py-2 w-40 text-sm bg-white border border-gray-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition"
+              />
+              {guiaFilter && (
+                <button onClick={() => setGuiaFilter('')} className="absolute right-2 text-gray-400 hover:text-gray-600">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Separador */}
+            <div className="flex-1" />
+
+            {/* Botón Actualizar */}
+            <button
+              onClick={loadRows}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg shadow-sm hover:bg-gray-100 hover:text-blue-600 transition"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Actualizar
+            </button>
+          </div>
+          <RequerimientoHistoricoTable
+            rows={filteredHistorico}
+            onRefresh={loadRows}
+            user={profile}
+          />
+        </TabsContent>
       </Tabs>
 
-      {/* ----------------------- MODAL ----------------------- */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg relative">
-            <h2 className="text-xl font-semibold mb-4">Nuevo Requerimiento</h2>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                const form = e.target as HTMLFormElement;
-                const porcentaje = parseInt((form.elements.namedItem('porcentaje') as HTMLInputElement).value);
-                const diasRestantes = parseInt((form.elements.namedItem('dias_restantes') as HTMLInputElement).value);
-                const obs = (form.elements.namedItem('observacion') as HTMLTextAreaElement).value;
-
-                if (!clienteSeleccionado || !serieSeleccionada || !skuSeleccionado) {
-                  alert('Completa todos los campos obligatorios.');
-                  return;
-                }
-
-                // Validar fecha si fue ingresada
-                let fechaISO = null;
-                if (fechaInstalacion) {
-                  fechaISO = validarYConvertirFecha(fechaInstalacion);
-                  if (!fechaISO) {
-                    alert('La fecha de instalación no es válida.');
-                    return;
-                  }
-                }
-
-                const { error } = await supabase.from('requerimiento').insert([
-                  {
-                    id_cliente: clienteSeleccionado,
-                    serie_impresora: serieSeleccionada,
-                    cod_sku: skuSeleccionado,
-                    porcentaje: porcentaje,
-                    dias_restantes: diasRestantes,
-                    fecha_instalacion: fechaISO,
-                    observacion: obs,
-                    creado_por: profile?.id,
-                  },
-                ]);
-
-                if (error) alert('Error al guardar: ' + error.message);
-                else {
-                  alert('Requerimiento creado exitosamente.');
-                  handleModalToggle(false);
-                  loadRows();
-                }
-              }}
-            >
-              {/* CLIENTE */}
-              <label className="block mb-4 relative">
-                Cliente:
-                <input
-                  type="text"
-                  className="border rounded p-2 w-full mt-1 disabled:bg-gray-100"
-                  placeholder="Buscar cliente..."
-                  value={filtroCliente}
-                  disabled={clienteBloqueado}
-                  onFocus={() => setFiltroCliente('')}
-                  onChange={(e) => {
-                    setFiltroCliente(e.target.value);
-                    setClienteSeleccionado(null);
-                    setSerieSeleccionada(null);
-                    setSkuSeleccionado(null);
-                    setSkus([]);
-                    setSeries([]);
-                    setSerieBloqueada(false);
-                  }}
-                  autoComplete="off"
-                />
-                {!clienteBloqueado && clientes.length > 0 && filtroCliente && (
-                  <ul className="absolute z-10 bg-white border rounded-md mt-1 w-full max-h-48 overflow-y-auto shadow-lg">
-                    {clientes
-                      .filter((c) =>
-                        c.nombre_especifico.toLowerCase().includes(filtroCliente.toLowerCase())
-                      )
-                      .slice(0, 20)
-                      .map((c) => (
-                        <li
-                          key={c.id_cliente}
-                          onClick={() => {
-                            setClienteSeleccionado(c.id_cliente);
-                            setFiltroCliente(c.nombre_especifico);
-                            setClienteBloqueado(true);
-                            setSerieSeleccionada(null);
-                            setSkuSeleccionado(null);
-                            setSkus([]);
-                            setSeries([]);
-                          }}
-                          className="px-3 py-2 hover:bg-blue-100 cursor-pointer"
-                        >
-                          {c.nombre_especifico}
-                        </li>
-                      ))}
-                  </ul>
-                )}
-              </label>
-
-              {/* SERIE */}
-              <label className="block mb-4 relative">
-                Serie Impresora:
-                <input
-                  type="text"
-                  className="border rounded p-2 w-full mt-1 disabled:bg-gray-100"
-                  placeholder={!clienteSeleccionado ? 'Selecciona primero un cliente' : 'Buscar serie...'}
-                  value={filtroSerie}
-                  disabled={!clienteSeleccionado || serieBloqueada}
-                  onFocus={() => setFiltroSerie('')}
-                  onChange={(e) => setFiltroSerie(e.target.value)}
-                  autoComplete="off"
-                />
-                {!serieBloqueada && series.length > 0 && filtroSerie && clienteSeleccionado && (
-                  <ul className="absolute z-10 bg-white border rounded-md mt-1 w-full max-h-48 overflow-y-auto shadow-lg">
-                    {series
-                      .filter((s) => s.serie.toLowerCase().includes(filtroSerie.toLowerCase()))
-                      .slice(0, 20)
-                      .map((s) => (
-                        <li
-                          key={s.serie}
-                          onClick={() => {
-                            setSerieSeleccionada(s.serie);
-                            setFiltroSerie(s.serie);
-                            setSerieBloqueada(true);
-                            setSkuSeleccionado(null);
-                            setSkus([]);
-                          }}
-                          className="px-3 py-2 hover:bg-blue-100 cursor-pointer"
-                        >
-                          {s.serie}
-                        </li>
-                      ))}
-                  </ul>
-                )}
-              </label>
-
-              {/* SKU */}
-              <label className="block mb-4 relative">
-                Código SKU:
-                <input
-                  type="text"
-                  className="border rounded p-2 w-full mt-1 cursor-pointer"
-                  placeholder={!serieSeleccionada ? 'Selecciona primero una serie' : 'Seleccionar SKU...'}
-                  value={filtroSku}
-                  disabled={!serieSeleccionada}
-                  onClick={() => {
-                    if (serieSeleccionada) {
-                      setSkuDropdownOpen(!skuDropdownOpen);
-                    }
-                  }}
-                  readOnly
-                  autoComplete="off"
-                />
-                {skuDropdownOpen && skus.length > 0 && (
-                  <ul className="absolute z-10 bg-white border rounded-md mt-1 w-full max-h-48 overflow-y-auto shadow-lg">
-                    {skus.map((s) => (
-                      <li
-                        key={s.cod_sku}
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          setSkuSeleccionado(s.cod_sku);
-                          setFiltroSku(`${s.cod_sku} — ${s.color}`);
-                          setSkuDropdownOpen(false);
-                        }}
-                        className="px-3 py-2 hover:bg-blue-100 cursor-pointer flex justify-between"
-                      >
-                        <span>{s.cod_sku}</span>
-                        <span className="text-sm text-gray-600">{s.color}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </label>
-
-              {/* PORCENTAJE */}
-              <label className="block mb-4">
-                Porcentaje:
-                <input 
-                  name="porcentaje" 
-                  type="number" 
-                  min={0} 
-                  max={100} 
-                  defaultValue={0} 
-                  className="border rounded p-2 w-full mt-1" 
-                  required 
-                />
-              </label>
-
-              {/* DÍAS RESTANTES */}
-              <label className="block mb-4">
-                Días Restantes:
-                <input 
-                  name="dias_restantes" 
-                  type="number" 
-                  min={0} 
-                  defaultValue={0} 
-                  className="border rounded p-2 w-full mt-1" 
-                  required 
-                />
-              </label>
-
-              {/* FECHA INSTALACIÓN */}
-              <label className="block mb-4">
-                Fecha de Instalación (dd/mm/yyyy):
-                <input 
-                  type="text" 
-                  value={fechaInstalacion}
-                  onChange={handleFechaChange}
-                  placeholder="dd/mm/yyyy"
-                  maxLength={10}
-                  className={`border rounded p-2 w-full mt-1 ${fechaError ? 'border-red-500' : ''}`}
-                />
-                {fechaError && (
-                  <span className="text-red-500 text-sm mt-1">{fechaError}</span>
-                )}
-              </label>
-
-              {/* OBSERVACIÓN */}
-              <label className="block mb-4">
-                Observación:
-                <textarea name="observacion" className="border rounded p-2 w-full mt-1" rows={3} />
-              </label>
-
-              {/* BOTONES */}
-              <div className="flex justify-between">
-                <button
-                  type="button"
-                  onClick={resetModalForm}
-                  className="bg-gray-100 text-gray-700 px-3 py-2 rounded hover:bg-gray-200"
-                >
-                  Reiniciar
-                </button>
-
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleModalToggle(false)}
-                    className="bg-gray-200 px-4 py-2 rounded hover:bg-gray-300"
-                  >
-                    Cancelar
-                  </button>
-                  <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-                    Guardar
-                  </button>
-                </div>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <NuevoRequerimientoModal
+        isOpen={showModal}
+        onClose={() => setShowModal(false)}
+        onSuccess={loadRows}
+        userId={profile?.id}
+      />
     </div>
   );
 }

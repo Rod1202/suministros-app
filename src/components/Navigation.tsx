@@ -17,7 +17,9 @@ const navItems = [
   { name: 'Inicio', icon: 'home', href: '/dashboard', roles: ['master', 'especialista', 'edistribucion', 'esuministros', 'adistribucion'] },
   { name: 'Requerimientos', icon: 'list_alt', href: '/dashboard/requirements', roles: ['master', 'especialista', 'operador', 'edistribucion', 'esuministros', 'adistribucion', 'adm'] },
   { name: 'Clientes', icon: 'group', href: '/dashboard/clients', roles: ['master', 'esuministros'] },
-  { name: 'Inventario', icon: 'inventory_2', href: '/dashboard/printers', roles: ['master', 'adm'] },
+  { name: 'Impresoras', icon: 'print', href: '/dashboard/printers', roles: ['master', 'adm'] },
+  { name: 'Movimientos', icon: 'swap_horiz', href: '/dashboard/movimientos', roles: ['master', 'adm'] },
+  { name: 'Taller', icon: 'build', href: '/dashboard/taller', roles: ['master', 'adm', 'adistribucion', 'edistribucion', 'pmovilidad'] },
   { name: 'Stock', icon: 'inventory', href: '/dashboard/skus', roles: ['master', 'edistribucion'] },
   { name: 'Compatibilidades', icon: 'sync', href: '/dashboard/compatibilities', roles: ['master', 'especialista'] },
 ];
@@ -43,10 +45,10 @@ export default function Navigation({ role, fullName, userId }: NavigationProps) 
     <nav className="flex flex-col w-64 h-full bg-white shadow-lg border-r border-gray-100 min-h-screen">
       {/* 1. Logo */}
       <div className="flex justify-center items-center h-16 p-4 border-b border-gray-200">
-      <img
+        <img
           src="/logo.png"
           alt="Operaciones MT"
-          className="h-10 w-auto max-w-full" 
+          className="h-10 w-auto max-w-full"
         />
       </div>
 

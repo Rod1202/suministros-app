@@ -9,6 +9,7 @@ type Requerimiento = {
   serie_impresora: string;
   id_cliente: number;
   cod_sku: string;
+  sku_default: string;
   cantidad_solicitada: number;
   estado: string;
   observacion: string | null;
@@ -66,6 +67,7 @@ export function RequerimientoTable({ rows, editable, onRefresh }: Props) {
     key: '',
     direction: null,
   });
+  // Map: serie_impresora -> SkuCompatible[]
   const [skuOptions, setSkuOptions] = useState<Record<string, SkuCompatible[]>>({});
   const [editingRow, setEditingRow] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -74,72 +76,87 @@ export function RequerimientoTable({ rows, editable, onRefresh }: Props) {
     setLocalRows(rows);
   }, [rows]);
 
-  // 🔹 Cargar SKUs compatibles por serie y mismo color
+  // ✅ CORREGIDO: Eliminado el N+1. Ahora se obtienen todos los datos en 3 queries paralelas
+  // en vez de 3 queries por cada fila.
   useEffect(() => {
+    if (rows.length === 0) return;
+
     const loadSkuCompatibles = async () => {
+      // 1) Obtener series e IDs de SKU únicos
+      const uniqueSeries = [...new Set(rows.map(r => r.serie_impresora).filter(Boolean))];
+      const uniqueSkus = [...new Set(rows.map(r => r.cod_sku).filter(Boolean))];
+
+      if (uniqueSeries.length === 0 || uniqueSkus.length === 0) return;
+
+      // 2) Query paralela: colores de SKUs + modelos de impresoras
+      const [{ data: skuColors }, { data: impresoras }] = await Promise.all([
+        supabase
+          .from('sku')
+          .select('cod_sku, id_color')
+          .in('cod_sku', uniqueSkus),
+        supabase
+          .from('impresora')
+          .select('serie, id_modelo')
+          .in('serie', uniqueSeries),
+      ]);
+
+      if (!skuColors || !impresoras) return;
+
+      // Mapas de acceso rápido
+      const skuColorMap: Record<string, number> = {};
+      skuColors.forEach((s: any) => { skuColorMap[s.cod_sku] = s.id_color; });
+
+      const serieModeloMap: Record<string, number> = {};
+      impresoras.forEach((imp: any) => { serieModeloMap[imp.serie] = imp.id_modelo; });
+
+      // Obtener modelos e id_colors únicos para la query de compatibilidades
+      const uniqueModelos = [...new Set(impresoras.map((i: any) => i.id_modelo))];
+      const uniqueColors = [...new Set(
+        rows.map(r => skuColorMap[r.cod_sku]).filter((c): c is number => c !== undefined)
+      )];
+
+      if (uniqueModelos.length === 0 || uniqueColors.length === 0) return;
+
+      // 3) Query única de compatibilidades para todos los modelos relevantes
+      const { data: compatibles } = await supabase
+        .from('compatibilidad')
+        .select(`
+          id_modelo,
+          cod_sku,
+          sku!inner (
+            cod_sku,
+            cantidad,
+            id_color
+          )
+        `)
+        .in('id_modelo', uniqueModelos)
+        .in('sku.id_color', uniqueColors);
+
+      if (!compatibles) return;
+
+      // 4) Construir el mapa serie -> SKUs compatibles del mismo color que el SKU actual
       const grouped: Record<string, SkuCompatible[]> = {};
 
-      for (const row of rows) {
-        if (!row.serie_impresora || !row.cod_sku) continue;
+      rows.forEach(row => {
+        const idModelo = serieModeloMap[row.serie_impresora];
+        const idColor = skuColorMap[row.cod_sku];
+        if (!idModelo || !idColor) return;
 
-        // Obtener el color del SKU actual
-        const { data: skuActual, error: errorSkuActual } = await supabase
-          .from('sku')
-          .select('id_color, color:color(nombre)')
-          .eq('cod_sku', row.cod_sku)
-          .single();
+        const compatiblesParaSerie = compatibles
+          .filter((c: any) => c.id_modelo === idModelo && c.sku?.id_color === idColor)
+          .map((c: any) => ({
+            cod_sku: c.sku.cod_sku,
+            cantidad: c.sku.cantidad,
+            color: '',
+          }));
 
-        if (errorSkuActual || !skuActual?.id_color) {
-          console.error('Error obteniendo color del SKU:', errorSkuActual);
-          continue;
-        }
-
-        // Obtener el modelo de la impresora
-        const { data: impresora, error: errorImpresora } = await supabase
-          .from('impresora')
-          .select('id_modelo')
-          .eq('serie', row.serie_impresora)
-          .single();
-
-        if (errorImpresora || !impresora?.id_modelo) {
-          console.error('Error obteniendo modelo de impresora:', errorImpresora);
-          continue;
-        }
-
-        // #################### OBTENER TODOS LOS SKUs COMPATIBLES DEL MISMO COLOR ####################
-        const { data: compatibles, error: errorCompatibles } = await supabase
-          .from('compatibilidad')
-          .select(`
-            cod_sku,
-            sku!inner (
-              cod_sku,
-              cantidad,
-              id_color
-            )
-          `)
-          .eq('id_modelo', impresora.id_modelo)
-          .eq('sku.id_color', skuActual.id_color);
-
-        if (errorCompatibles) {
-          console.error('Error obteniendo compatibles:', errorCompatibles);
-          continue;
-        }
-
-        // Mapear todos los compatibles (sin filtrar por color nuevamente)
-        grouped[row.serie_impresora] = (compatibles || []).map((item: any) => ({
-          cod_sku: item.sku.cod_sku,
-          cantidad: item.sku.cantidad,
-          color: '', // No necesitamos mostrar el color ya que todos son del mismo color
-        }));
-        // #################### FIN ####################
-      }
+        grouped[row.serie_impresora] = compatiblesParaSerie;
+      });
 
       setSkuOptions(grouped);
     };
 
-    if (rows.length > 0) {
-      loadSkuCompatibles();
-    }
+    loadSkuCompatibles();
   }, [rows]);
 
   const handleSort = (key: string) => {
@@ -189,7 +206,6 @@ export function RequerimientoTable({ rows, editable, onRefresh }: Props) {
       setLocalRows((prev) =>
         prev.map((row) => (row.id_requerimiento === id ? { ...row, [field]: value } : row))
       );
-      
     }
 
     setEditingRow(null);
@@ -208,7 +224,8 @@ export function RequerimientoTable({ rows, editable, onRefresh }: Props) {
                 { key: 'clientes.nombre_especifico', label: 'Cliente' },
                 { key: 'direccion_provincia', label: 'Dirección-Provincia' },
                 { key: 'serie_impresora', label: 'Serie' },
-                { key: 'cod_sku', label: 'SKU' },
+                { key: 'sku_default', label: 'SKU Default' },
+                { key: 'cod_sku', label: 'SKU Enviado' },
                 { key: 'porcentaje', label: 'Porcentaje' },
                 { key: 'dias_restantes', label: 'Dias Restantes' },
                 { key: 'timestamp_registro', label: 'Fecha Registro' },
@@ -222,14 +239,12 @@ export function RequerimientoTable({ rows, editable, onRefresh }: Props) {
                   <div className="flex items-center gap-1">
                     {col.label}
                     <ArrowUpDown
-                      className={`w-3 h-3 ${
-                        sortConfig.key === col.key ? 'text-blue-500' : 'text-gray-400'
-                      }`}
+                      className={`w-3 h-3 ${sortConfig.key === col.key ? 'text-blue-500' : 'text-gray-400'
+                        }`}
                     />
                   </div>
                 </th>
               ))}
-              <th className="px-4 py-3">Acciones</th>
             </tr>
           </thead>
 
@@ -238,25 +253,37 @@ export function RequerimientoTable({ rows, editable, onRefresh }: Props) {
               const editableSku = editable && r.estado.toLowerCase() !== 'aprobado';
               const skuCompatibles = skuOptions[r.serie_impresora] || [];
 
+              // Coloreo de fila según estado
+              const rowBg =
+                r.estado.toLowerCase() === 'aprobado' ? 'bg-orange-50 hover:bg-orange-100' :
+                  r.estado.toLowerCase() === 'transito' ? 'bg-cyan-50   hover:bg-cyan-100' :
+                    r.estado.toLowerCase() === 'sin stock' ? 'bg-red-50    hover:bg-red-100' :
+                      'hover:bg-gray-50';
+
               const direccion = r.direccion || r.impresora?.direccion || '-';
               const provincia = r.provincia || r.impresora?.provincia || '-';
               const direccionCompleta =
                 direccion !== '-' && provincia !== '-'
                   ? `${direccion} - ${provincia}`
                   : direccion !== '-'
-                  ? direccion
-                  : provincia !== '-'
-                  ? provincia
-                  : '-';
+                    ? direccion
+                    : provincia !== '-'
+                      ? provincia
+                      : '-';
 
               return (
-                <tr key={r.id_requerimiento} className="border-t hover:bg-gray-50">
+                <tr key={r.id_requerimiento} className={`border-t transition-colors ${rowBg}`}>
                   <td className="px-4 py-2">{r.id_requerimiento}</td>
                   <td className="px-4 py-2">{r.clientes?.nombre_especifico || '-'}</td>
                   <td className="px-4 py-2">{direccionCompleta}</td>
                   <td className="px-4 py-2">{r.serie_impresora}</td>
 
-                  {/* #################### SKU CON TAMAÑO FIJO #################### */}
+                  {/* SKU Default (solo lectura) */}
+                  <td className="px-4 py-2">
+                    <span className="text-gray-600 font-mono text-xs">{r.sku_default || '-'}</span>
+                  </td>
+
+                  {/* SKU Enviado (editable) */}
                   <td className="px-4 py-2">
                     {editingRow === r.id_requerimiento && editableSku ? (
                       <select
@@ -275,31 +302,28 @@ export function RequerimientoTable({ rows, editable, onRefresh }: Props) {
                     ) : (
                       <span
                         onClick={() => editableSku && setEditingRow(r.id_requerimiento)}
-                        className={`cursor-pointer transition-colors duration-150 ${
-                          editableSku
-                            ? 'text-blue-600 hover:text-blue-800 hover:underline'
-                            : 'text-gray-500'
-                        }`}
+                        className={`cursor-pointer transition-colors duration-150 ${editableSku
+                          ? 'text-blue-600 hover:text-blue-800 hover:underline'
+                          : 'text-gray-500'
+                          }`}
                       >
                         {r.cod_sku || '-'}
                       </span>
                     )}
                   </td>
-                  {/* #################### FIN SKU #################### */}
 
                   <td className="px-4 py-2">{r.porcentaje ?? '-'}%</td>
                   <td className="px-4 py-2">{r.dias_restantes ?? '-'}</td>
                   <td className="px-4 py-2">
                     {r.timestamp_registro
                       ? new Date(r.timestamp_registro).toLocaleDateString('es-PE', {
-                          day: '2-digit',
-                          month: '2-digit',
-                          year: 'numeric',
-                        })
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                      })
                       : '-'}
                   </td>
 
-                  {/* #################### ESTADO CON TAMAÑO FIJO #################### */}
                   <td className="px-4 py-2">
                     {editable ? (
                       <select
@@ -315,18 +339,7 @@ export function RequerimientoTable({ rows, editable, onRefresh }: Props) {
                       <span className="capitalize">{r.estado}</span>
                     )}
                   </td>
-                  {/* #################### FIN ESTADO #################### */}
 
-                  <td className="px-4 py-2">
-                    {editable && (
-                      <button
-                        onClick={onRefresh}
-                        className="text-blue-600 hover:text-blue-800 text-xs font-medium transition duration-150 p-1 rounded hover:bg-blue-50"
-                      >
-                        ↻ Refrescar
-                      </button>
-                    )}
-                  </td>
                 </tr>
               );
             })}

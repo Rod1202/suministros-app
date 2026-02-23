@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowUpDown } from 'lucide-react';
+import { supabase } from '@/lib/supabaseClient';
+import { ArrowUpDown, MessageSquare, Check, X } from 'lucide-react';
 
 type RequerimientoHistorico = {
   id_requerimiento?: number;
@@ -9,7 +10,9 @@ type RequerimientoHistorico = {
   serie_impresora: string;
   id_cliente: number;
   cod_sku: string;
+  sku_default?: string;
   estado: string;
+  guia?: string | null;
   fecha_atencion?: string;
   observacion?: string;
   timestamp_registro?: string;
@@ -19,6 +22,7 @@ type RequerimientoHistorico = {
   provincia?: string;
   distrito?: string;
   direccion?: string;
+  coment?: string | null;
   clientes?: {
     nombre_especifico: string;
   };
@@ -35,27 +39,99 @@ type Props = {
   user: any;
 };
 
-// #################### FUNCIÓN PARA OBTENER COLOR DEL ESTADO ####################
 const getEstadoColor = (estado: string): string => {
-  const estadoLower = estado.toLowerCase();
-  switch (estadoLower) {
-    case 'pendiente':
-      return 'bg-yellow-100 text-yellow-800';
-    case 'sin stock':
-      return 'bg-red-100 text-red-800';
-    case 'aprobado':
-      return 'bg-orange-100 text-orange-800';
-    case 'transito':
-      return 'bg-cyan-100 text-cyan-800';
-    case 'atendido':
-      return 'bg-green-100 text-green-800';
-    case 'cancelado':
-      return 'bg-red-100 text-red-800';
-    default:
-      return 'bg-gray-100 text-gray-800';
+  switch (estado.toLowerCase()) {
+    case 'pendiente': return 'bg-yellow-100 text-yellow-800';
+    case 'sin stock': return 'bg-red-100 text-red-800';
+    case 'aprobado': return 'bg-orange-100 text-orange-800';
+    case 'transito': return 'bg-cyan-100 text-cyan-800';
+    case 'atendido': return 'bg-green-100 text-green-800';
+    case 'cancelado': return 'bg-red-100 text-red-800';
+    default: return 'bg-gray-100 text-gray-800';
   }
 };
-// #################### FIN FUNCIÓN COLOR ####################
+
+/** Celda de comentario con edición inline */
+function ComentCell({ row, onSaved }: {
+  row: RequerimientoHistorico;
+  onSaved: (idHistorico: number, value: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(row.coment ?? '');
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!row.id_historico) return;
+    setSaving(true);
+    const { error } = await supabase
+      .from('requerimiento_historico')
+      .update({ coment: value.trim() || null })
+      .eq('id_historico', row.id_historico);
+    setSaving(false);
+    if (!error) {
+      onSaved(row.id_historico, value.trim());
+      setEditing(false);
+    } else {
+      console.error('Error guardando comentario:', error);
+    }
+  };
+
+  const handleCancel = () => {
+    setValue(row.coment ?? '');
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="flex items-start gap-1 min-w-[200px]">
+        <textarea
+          className="border rounded p-1 text-xs w-full resize-none focus:outline-none focus:ring-2 focus:ring-blue-400"
+          rows={2}
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          autoFocus
+          placeholder="Escribe un comentario..."
+        />
+        <div className="flex flex-col gap-1 mt-0.5">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            title="Guardar"
+            className="p-1 rounded bg-green-100 hover:bg-green-200 text-green-700 disabled:opacity-50"
+          >
+            <Check className="w-3 h-3" />
+          </button>
+          <button
+            onClick={handleCancel}
+            title="Cancelar"
+            className="p-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-600"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setEditing(true)}
+      title={value ? 'Editar comentario' : 'Agregar comentario'}
+      className="flex items-center gap-1.5 text-left text-xs group w-full"
+    >
+      {value ? (
+        <span className="text-gray-700 line-clamp-2 group-hover:text-blue-600 transition-colors">
+          {value}
+        </span>
+      ) : (
+        <span className="text-gray-400 italic group-hover:text-blue-500 transition-colors flex items-center gap-1">
+          <MessageSquare className="w-3 h-3" />
+          Agregar
+        </span>
+      )}
+    </button>
+  );
+}
 
 export function RequerimientoHistoricoTable({ rows, onRefresh }: Props) {
   const [localRows, setLocalRows] = useState<RequerimientoHistorico[]>(rows);
@@ -68,7 +144,6 @@ export function RequerimientoHistoricoTable({ rows, onRefresh }: Props) {
     setLocalRows(rows);
   }, [rows]);
 
-  // 🔹 Manejar cambio de orden
   const handleSort = (key: string) => {
     setSortConfig((prev) => {
       if (prev.key === key) {
@@ -79,14 +154,11 @@ export function RequerimientoHistoricoTable({ rows, onRefresh }: Props) {
     });
   };
 
-  // 🔹 Ordenar filas localmente
   const sortedRows = useMemo(() => {
     if (!sortConfig.key || !sortConfig.direction) return localRows;
-    const sorted = [...localRows].sort((a, b) => {
+    return [...localRows].sort((a, b) => {
       let aValue: any;
       let bValue: any;
-
-      // Manejar campos anidados
       if (sortConfig.key === 'clientes.nombre_especifico') {
         aValue = a.clientes?.nombre_especifico;
         bValue = b.clientes?.nombre_especifico;
@@ -94,112 +166,119 @@ export function RequerimientoHistoricoTable({ rows, onRefresh }: Props) {
         aValue = (a as any)[sortConfig.key];
         bValue = (b as any)[sortConfig.key];
       }
-
       if (aValue == null) return 1;
       if (bValue == null) return -1;
       if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
       if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
       return 0;
     });
-    return sorted;
   }, [localRows, sortConfig]);
+
+  /** Actualiza el comentario localmente sin necesidad de refetch */
+  const handleComentSaved = (idHistorico: number, newComent: string) => {
+    setLocalRows(prev =>
+      prev.map(r => r.id_historico === idHistorico ? { ...r, coment: newComent || null } : r)
+    );
+  };
+
+  const COLUMNS = [
+    { key: 'clientes.nombre_especifico', label: 'Cliente' },
+    { key: 'direccion_provincia', label: 'Dirección-Provincia' },
+    { key: 'contacto', label: 'Contacto' },
+    { key: 'serie_impresora', label: 'Serie' },
+    { key: 'cod_sku', label: 'SKU Enviado' },
+    { key: 'guia', label: 'Guía' },
+    { key: 'estado', label: 'Estado' },
+    { key: 'fecha_atencion', label: 'Fecha Atención' },
+    { key: 'coment', label: 'Comentario' },
+  ];
 
   return (
     <div className="overflow-x-auto rounded-xl shadow border border-gray-200 bg-white">
       <table className="min-w-full text-sm text-left text-gray-700">
-        {/* #################### ENCABEZADOS PERSONALIZADOS #################### */}
         <thead className="bg-gray-100 text-gray-700 uppercase text-xs">
           <tr>
-            {[
-              { key: 'clientes.nombre_especifico', label: 'Cliente' },
-              { key: 'direccion_provincia', label: 'Dirección-Provincia' },
-              { key: 'contacto', label: 'Nombre Contacto - Teléfono' },
-              { key: 'serie_impresora', label: 'Serie' },
-              { key: 'cod_sku', label: 'SKU' },
-              { key: 'estado', label: 'Estado' },
-              { key: 'fecha_atencion', label: 'Fecha Atención' },
-            ].map((col) => (
+            {COLUMNS.map((col) => (
               <th
                 key={col.key}
-                onClick={() => handleSort(col.key)}
-                className="px-4 py-3 cursor-pointer select-none"
+                onClick={() => col.key !== 'coment' && handleSort(col.key)}
+                className={`px-4 py-3 select-none ${col.key !== 'coment' ? 'cursor-pointer' : ''}`}
               >
                 <div className="flex items-center gap-1">
                   {col.label}
-                  <ArrowUpDown
-                    className={`w-3 h-3 ${
-                      sortConfig.key === col.key ? 'text-blue-500' : 'text-black'
-                    }`}
-                  />
+                  {col.key !== 'coment' && (
+                    <ArrowUpDown
+                      className={`w-3 h-3 ${sortConfig.key === col.key ? 'text-blue-500' : 'text-black'}`}
+                    />
+                  )}
                 </div>
               </th>
             ))}
           </tr>
         </thead>
-        {/* #################### FIN ENCABEZADOS #################### */}
 
         <tbody>
           {sortedRows.map((r, index) => {
-            // #################### DETERMINAR DIRECCIÓN Y PROVINCIA ####################
-            // Priorizar datos propios del requerimiento, luego de impresora
             const direccion = r.direccion || r.impresora?.direccion || '-';
             const provincia = r.provincia || r.impresora?.provincia || '-';
-            const direccionCompleta = 
+            const direccionCompleta =
               direccion !== '-' && provincia !== '-'
                 ? `${direccion} - ${provincia}`
-                : direccion !== '-' 
-                  ? direccion 
-                  : provincia !== '-' 
-                    ? provincia 
+                : direccion !== '-' ? direccion
+                  : provincia !== '-' ? provincia
                     : '-';
 
-            // #################### NOMBRE CONTACTO Y TELÉFONO ####################
-            const contacto = 
+            const contacto =
               r.nombre_contacto && r.numero_contacto
                 ? `${r.nombre_contacto} - ${r.numero_contacto}`
                 : r.nombre_contacto || r.numero_contacto || '-';
 
-            // #################### KEY ÚNICO PARA CADA FILA ####################
-            const rowKey = r.id_historico 
-              ? `historico-${r.id_historico}` 
-              : r.id_requerimiento 
-                ? `activo-${r.id_requerimiento}` 
+            const rowKey = r.id_historico
+              ? `historico-${r.id_historico}`
+              : r.id_requerimiento
+                ? `activo-${r.id_requerimiento}`
                 : `row-${index}`;
 
             return (
               <tr key={rowKey} className="border-t hover:bg-gray-50">
-                {/* Cliente */}
                 <td className="px-4 py-2">{r.clientes?.nombre_especifico || '-'}</td>
-                
-                {/* Dirección - Provincia */}
                 <td className="px-4 py-2">{direccionCompleta}</td>
-                
-                {/* Nombre Contacto - Teléfono */}
                 <td className="px-4 py-2">{contacto}</td>
-                
-                {/* Serie */}
                 <td className="px-4 py-2">{r.serie_impresora || '-'}</td>
-
-                {/* SKU */}
                 <td className="px-4 py-2">{r.cod_sku || '-'}</td>
 
-                {/* #################### Estado con colores #################### */}
+                {/* Guía */}
+                <td className="px-4 py-2">
+                  {r.guia ? (
+                    <span className="bg-gray-100 text-gray-700 font-mono text-xs px-2 py-0.5 rounded">
+                      {r.guia}
+                    </span>
+                  ) : '-'}
+                </td>
+
+                {/* Estado con colores */}
                 <td className="px-4 py-2">
                   <span className={`px-2 py-1 rounded-full text-xs font-medium capitalize ${getEstadoColor(r.estado)}`}>
                     {r.estado}
                   </span>
                 </td>
-                {/* #################### FIN Estado #################### */}
 
                 {/* Fecha Atención */}
                 <td className="px-4 py-2">
                   {r.fecha_atencion
                     ? new Date(r.fecha_atencion).toLocaleDateString('es-PE', {
-                        day: '2-digit',
-                        month: '2-digit',
-                        year: 'numeric'
-                      })
+                      day: '2-digit', month: '2-digit', year: 'numeric',
+                    })
                     : '-'}
+                </td>
+
+                {/* Comentario editable — solo si la fila es del histórico */}
+                <td className="px-4 py-2 max-w-[220px]">
+                  {r.id_historico ? (
+                    <ComentCell row={r} onSaved={handleComentSaved} />
+                  ) : (
+                    <span className="text-gray-300 text-xs italic">—</span>
+                  )}
                 </td>
               </tr>
             );

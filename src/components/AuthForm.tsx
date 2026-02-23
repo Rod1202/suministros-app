@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { supabase } from '@/lib/supabaseClient'; 
+import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
 
 export default function AuthForm() {
@@ -107,10 +107,7 @@ export default function AuthForm() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 px-4 rounded-lg text-sm font-semibold text-white transition duration-150 ease-in-out disabled:opacity-50"
-            style={{ backgroundColor: '#0066ff' }}
-            onMouseEnter={(e) => !loading && (e.currentTarget.style.backgroundColor = '#0052cc')}
-            onMouseLeave={(e) => !loading && (e.currentTarget.style.backgroundColor = '#0066ff')}
+            className="w-full py-3 px-4 rounded-lg text-sm font-semibold text-white transition-colors duration-150 ease-in-out disabled:opacity-50 bg-[#0066ff] hover:bg-[#0052cc]"
           >
             {loading ? 'Cargando...' : 'Ingresar'}
           </button>

@@ -29,14 +29,16 @@ type MonthPoint = {
 
 type TopItem = { key: string; count: number };
 
-const MONTH_LABELS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+const MONTH_LABELS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
 function monthKeyFromDate(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; // e.g. "2025-03"
 }
 
 function monthLabelFromKey(key: string) {
-  const [m] = key.split('-').map(Number);
+  // key format: "YYYY-MM" — necesitamos el índice 1 (mes), no el 0 (año)
+  const parts = key.split('-').map(Number);
+  const m = parts[1]; // mes: 1-12
   return `${MONTH_LABELS[m - 1]}`;
 }
 
@@ -69,17 +71,20 @@ export default function DashboardPage() {
     setError(null);
 
     try {
-      // 1) Fetch active requerimientos
+      // 1) Fetch active requerimientos — solo los campos necesarios para los KPIs
       const { data: reqData, error: reqError } = await supabase
         .from('requerimiento')
-        .select('*');
+        .select('estado, fecha_solicitud, cod_sku')
+        .limit(500);
 
       if (reqError) throw reqError;
 
-      // 2) Fetch historical requerimientos
+      // 2) Fetch historical requerimientos — solo los campos necesarios
       const { data: histData, error: histError } = await supabase
         .from('requerimiento_historico')
-        .select('*');
+        .select('estado, fecha_solicitud, fecha_atencion, id_cliente, cod_sku')
+        .order('timestamp_registro', { ascending: false })
+        .limit(500);
 
       if (histError) throw histError;
 
@@ -146,7 +151,8 @@ export default function DashboardPage() {
         if (!h || h.estado !== 'atendido' || !h.fecha_atencion) return;
         const d = new Date(h.fecha_atencion);
         if (d >= startOfMonth && d < endOfMonth) {
-          const cliente = (h.cliente || 'Sin cliente').toString();
+          // Usamos id_cliente como clave (ya que no hacemos join al nombre)
+          const cliente = h.id_cliente ? `Cliente #${h.id_cliente}` : 'Sin cliente';
           clientCount[cliente] = (clientCount[cliente] || 0) + 1;
         }
       });
@@ -162,7 +168,7 @@ export default function DashboardPage() {
       const skuCount: Record<string, number> = {};
       active.forEach((r: any) => {
         if (!r || r.estado !== 'sin stock') return;
-        const sku = (r.sku || 'SIN SKU').toString();
+        const sku = (r.cod_sku || 'SIN SKU').toString();
         skuCount[sku] = (skuCount[sku] || 0) + 1;
       });
       const topSkusArr = Object.entries(skuCount)

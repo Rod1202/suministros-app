@@ -7,7 +7,7 @@ type TabsProps = {
   defaultValue: string
   children: React.ReactNode
   className?: string
-  onValueChange?: (value: string) => void 
+  onValueChange?: (value: string) => void
 }
 
 export const Tabs = ({ defaultValue, children, className = '', onValueChange }: TabsProps) => {
@@ -24,7 +24,7 @@ export const Tabs = ({ defaultValue, children, className = '', onValueChange }: 
   return (
     <div className={`w-full ${className}`}>
       {Children.map(children, (child: any) =>
-        cloneElement(child, { activeTab, setActiveTab })
+        React.isValidElement(child) ? cloneElement(child, { activeTab, setActiveTab } as any) : null
       )}
     </div>
   )
@@ -34,7 +34,7 @@ type TabsListProps = {
   children: React.ReactNode
   activeTab?: string
   setActiveTab?: (val: string) => void
-  onValueChange?: (value: string) => void 
+  onValueChange?: (value: string) => void
   className?: string
 }
 
@@ -48,7 +48,7 @@ export const TabsList = ({
     className={`flex gap-2 mb-3 border-b pb-2 ${className}`}
   >
     {Children.map(children, (child: any) =>
-      cloneElement(child, { activeTab, setActiveTab })
+      React.isValidElement(child) ? cloneElement(child, { activeTab, setActiveTab } as any) : null
     )}
   </div>
 )
